@@ -1,23 +1,81 @@
 import asyncio
 
-
 HOST = 'localhost'
 PORT = 9095
 
 
-async def tcp_echo_client(host, port):
-    reader, writer = await asyncio.open_connection(host, port)
-    message = 'Hello, world'
+async def tcp_echo_client():
+    """
+    Клиент с авто-переподключением и нормальной обработкой ошибок.
+    """
 
-    writer.write(message.encode())
-    await writer.drain()
+    loop = asyncio.get_running_loop()
 
-    data = await reader.read(100)
-    writer.close()
-    # await writer.wait_closed()
+    while True:  # Главный цикл жизни клиента (переподключение)
+        reader = None
+        writer = None
 
-# asyncio.run(tcp_echo_client(HOST, PORT))
+        try:
+            # --- ПОДКЛЮЧЕНИЕ ---
+            while True:
+                try:
+                    reader, writer = await asyncio.open_connection(HOST, PORT)
+                    print(f"✅ Подключено к серверу {HOST}:{PORT}")
+                    break
+                except ConnectionRefusedError:
+                    print("⛔ Сервер недоступен. Повтор через 3 сек...")
+                    await asyncio.sleep(3)
 
-loop = asyncio.get_event_loop()
-task = loop.create_task(tcp_echo_client(HOST, PORT))
-loop.run_until_complete(task)
+            # --- РАБОТА С СЕРВЕРОМ ---
+            while True:
+                message = await loop.run_in_executor(
+                    None,
+                    input,
+                    "Введите сообщение (exit для выхода): "
+                )
+
+                if message.lower() == 'exit':
+                    print("👋 Выход из клиента")
+                    return  # полностью завершаем клиент
+
+                try:
+                    writer.write((message + '\n').encode())
+                    await writer.drain()
+                except (ConnectionResetError, BrokenPipeError):
+                    print("⚠️ Соединение потеряно при отправке")
+                    break  # переподключение
+
+                try:
+                    data = await reader.readline()
+                except ConnectionResetError:
+                    print("⚠️ Сервер разорвал соединение")
+                    break
+
+                if not data:
+                    print("⚠️ Сервер закрыл соединение")
+                    break
+
+                print(f"📩 Ответ: {data.decode().strip()}")
+
+        except KeyboardInterrupt:
+            print("\n🛑 Клиент остановлен пользователем")
+            break
+
+        except Exception as e:
+            # Ловим ВСЁ, чтобы клиент не падал
+            print(f"❌ Неожиданная ошибка: {e}")
+
+        finally:
+            # --- ГАРАНТИРОВАННОЕ ЗАКРЫТИЕ ---
+            if writer:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+            print("🔄 Переподключение...")
+
+
+if __name__ == '__main__':
+    asyncio.run(tcp_echo_client())
